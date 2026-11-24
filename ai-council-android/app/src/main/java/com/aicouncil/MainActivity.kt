@@ -2,66 +2,69 @@ package com.aicouncil
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
-import android.text.InputType
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
-import android.widget.Toast
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class Member(
-    val name: String,
-    val provider: String, // local | claude | openai | gemini
-    val uri: Uri? = null,
-    val apiKey: String = "",
-    val model: String = ""
-)
+data class Member(val name: String, val path: String? = null, val uri: Uri? = null)
+
+data class CatalogItem(val title: String, val shortName: String, val file: String, val url: String)
 
 class MainActivity : Activity() {
 
     companion object {
-        const val MAX_TURNS = 12
+        const val MAX_TURNS = 6
+        const val HISTORY_CHARS = 1500
+        const val REPLY_CHARS = 600
         const val DONE_MARK = "[تم الحل]"
         const val REQ_PICK = 1
         const val SYSTEM =
-            "أنت عضو في فريق من نماذج ذكاء اصطناعي يحل مشكلة معاً. " +
-            "اقرأ النقاش السابق، وأضف ما يفيد: تصحيح خطأ، أو اقتراح، أو تأييد مع سبب. " +
-            "لا تكرر ما قاله الآخرون. أجب بالعربية وباختصار. " +
-            "إذا رأيت أن الحل النهائي مكتمل ومتفق عليه، اكتب $DONE_MARK في آخر ردك."
-        val PROVIDERS = listOf("Claude" to "claude", "ChatGPT" to "openai", "Gemini" to "gemini")
-        val DEFAULT_MODEL = mapOf("claude" to "claude-haiku-5-5", "openai" to "", "gemini" to "")
+            "أنت عضو في فريق نماذج ذكاء اصطناعي يحل مشكلة معاً. " +
+            "اقرأ النقاش، وأضف ما يفيد: تصحيحاً أو اقتراحاً أو تأييداً مع سبب. " +
+            "أجب بالعربية في جملتين إلى أربع جمل. " +
+            "إذا رأيت أن الحل اكتمل واتفق عليه الجميع، اكتب $DONE_MARK في آخر ردك."
+
+        private const val HF = "https://huggingface.co/litert-community"
+        val CATALOG = listOf(
+            CatalogItem(
+                "Qwen2.5 0.5B (خفيف، حوالي 550 ميغابايت)", "Qwen2.5 0.5B",
+                "Qwen2.5-0.5B-Instruct_q8.task",
+                "$HF/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+            ),
+            CatalogItem(
+                "Qwen2.5 1.5B (أقوى، حوالي 1.6 غيغابايت)", "Qwen2.5 1.5B",
+                "Qwen2.5-1.5B-Instruct_q8.task",
+                "$HF/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+            )
+        )
     }
 
-    private val localMembers = mutableListOf<Member>()
-    private val cloudMembers = mutableListOf<Member>()
+    private val pickedMembers = mutableListOf<Member>()
     private lateinit var modelsLabel: TextView
     private lateinit var problemInput: EditText
     private lateinit var startButton: Button
     private lateinit var statusView: TextView
     private lateinit var chat: LinearLayout
     private lateinit var scroll: ScrollView
-    private var running = false
+
+    @Volatile private var running = false
+    @Volatile private var stopRequested = false
+    @Volatile private var downloading = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        loadCloud()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -72,18 +75,22 @@ class MainActivity : Activity() {
             textSize = 22f
             setTypeface(null, Typeface.BOLD)
         }
+        val subtitle = TextView(this).apply {
+            text = "نماذج تعمل على هاتفك فقط، بدون إنترنت ولا مفاتيح (التنزيل يحتاج إنترنت لمرة واحدة)"
+            textSize = 13f
+        }
         modelsLabel = TextView(this)
-        val cloudButton = Button(this).apply {
-            text = "إضافة Claude / ChatGPT / Gemini"
-            setOnClickListener { addCloudDialog() }
+        val downloadButton = Button(this).apply {
+            text = "تنزيل نموذج مجاني"
+            setOnClickListener { downloadDialog() }
         }
         val pickButton = Button(this).apply {
             text = "إضافة نموذج من ملف على الهاتف"
             setOnClickListener { pickModels() }
         }
         val clearButton = Button(this).apply {
-            text = "مسح القائمة"
-            setOnClickListener { clearMembers() }
+            text = "حذف النماذج"
+            setOnClickListener { confirmClear() }
         }
         problemInput = EditText(this).apply {
             hint = "اكتب المشكلة التي تريد حلها..."
@@ -91,15 +98,23 @@ class MainActivity : Activity() {
         }
         startButton = Button(this).apply {
             text = "ابدأ النقاش"
-            setOnClickListener { startCouncil() }
+            setOnClickListener {
+                if (running) {
+                    stopRequested = true
+                    setStatus("جارٍ الإيقاف بعد الرد الحالي...")
+                } else {
+                    startCouncil()
+                }
+            }
         }
         statusView = TextView(this)
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply { addView(chat) }
 
         root.addView(title)
+        root.addView(subtitle)
         root.addView(modelsLabel)
-        root.addView(cloudButton)
+        root.addView(downloadButton)
         root.addView(pickButton)
         root.addView(clearButton)
         root.addView(problemInput)
@@ -112,136 +127,110 @@ class MainActivity : Activity() {
 
     // ---------- الأعضاء ----------
 
-    private fun prefs() = getSharedPreferences("council", Context.MODE_PRIVATE)
+    private fun modelsDir() = File(filesDir, "models").apply { mkdirs() }
 
-    private fun cloudMember(provider: String, key: String, model: String): Member {
-        val label = PROVIDERS.first { it.second == provider }.first
-        return Member("$label ($model)", provider, null, key, model)
-    }
+    private fun downloadedMembers(): List<Member> =
+        CATALOG.filter { File(modelsDir(), it.file).exists() }
+            .map { Member(it.shortName, File(modelsDir(), it.file).absolutePath) }
 
-    private fun loadCloud() {
-        cloudMembers.clear()
-        try {
-            val arr = JSONArray(prefs().getString("cloud", "[]") ?: "[]")
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                cloudMembers.add(cloudMember(o.getString("provider"), o.getString("key"), o.getString("model")))
-            }
-        } catch (e: Exception) {
-            cloudMembers.clear()
-        }
-    }
+    private fun allMembers(): List<Member> = downloadedMembers() + pickedMembers
 
-    private fun saveCloud() {
-        val arr = JSONArray()
-        for (m in cloudMembers) {
-            arr.put(JSONObject().put("provider", m.provider).put("key", m.apiKey).put("model", m.model))
-        }
-        prefs().edit().putString("cloud", arr.toString()).apply()
-    }
-
-    private fun refreshLabel() {
-        val all = cloudMembers + localMembers
+    private fun refreshLabel() = runOnUiThread {
+        val all = allMembers()
         modelsLabel.text = if (all.isEmpty()) {
-            "لم تضف أي نموذج بعد"
+            "لا توجد نماذج بعد. اضغط تنزيل نموذج مجاني."
         } else {
             "الأعضاء: " + all.joinToString("، ") { it.name }
         }
     }
 
-    private fun clearMembers() {
-        cloudMembers.clear()
-        localMembers.clear()
-        saveCloud()
-        refreshLabel()
-    }
-
-    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-
-    // ---------- إضافة نموذج سحابي ----------
-
-    private fun addCloudDialog() {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 0)
-        }
-        val spinner = Spinner(this)
-        spinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, PROVIDERS.map { it.first }
-        )
-        val keyInput = EditText(this).apply {
-            hint = "مفتاح API"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        val modelInput = EditText(this).apply {
-            hint = "اسم النموذج (اضغط جلب القائمة)"
-            setText(DEFAULT_MODEL["claude"])
-        }
-        val fetchBtn = Button(this).apply { text = "جلب قائمة النماذج" }
-
-        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                modelInput.setText(DEFAULT_MODEL[PROVIDERS[pos].second] ?: "")
-            }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-
-        fetchBtn.setOnClickListener {
-            val provider = PROVIDERS[spinner.selectedItemPosition].second
-            val key = keyInput.text.toString().trim()
-            if (key.isEmpty()) {
-                toast("أدخل المفتاح أولاً")
-            } else {
-                fetchBtn.isEnabled = false
-                Thread {
-                    try {
-                        val list = fetchModels(provider, key)
-                        runOnUiThread {
-                            fetchBtn.isEnabled = true
-                            if (list.isEmpty()) {
-                                toast("لم أجد نماذج لهذا المفتاح")
-                            } else {
-                                AlertDialog.Builder(this)
-                                    .setTitle("اختر نموذجاً")
-                                    .setItems(list.toTypedArray()) { _, which -> modelInput.setText(list[which]) }
-                                    .show()
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        runOnUiThread {
-                            fetchBtn.isEnabled = true
-                            toast("تعذر الجلب: ${e.message}")
-                        }
-                    }
-                }.start()
-            }
-        }
-
-        box.addView(spinner)
-        box.addView(keyInput)
-        box.addView(fetchBtn)
-        box.addView(modelInput)
-
+    private fun confirmClear() {
         AlertDialog.Builder(this)
-            .setTitle("إضافة نموذج سحابي")
-            .setView(box)
-            .setPositiveButton("إضافة") { _, _ ->
-                val provider = PROVIDERS[spinner.selectedItemPosition].second
-                val key = keyInput.text.toString().trim()
-                val model = modelInput.text.toString().trim()
-                if (key.isEmpty() || model.isEmpty()) {
-                    toast("المفتاح واسم النموذج مطلوبان")
-                } else {
-                    cloudMembers.add(cloudMember(provider, key, model))
-                    saveCloud()
-                    refreshLabel()
-                }
+            .setTitle("حذف النماذج")
+            .setMessage("سيُحذف كل ما نزّلته ولن تتمكن من استخدامه إلا بتنزيله مجدداً. متأكد؟")
+            .setPositiveButton("حذف") { _, _ ->
+                modelsDir().listFiles()?.forEach { it.delete() }
+                cacheDir.listFiles()?.filter { it.name.startsWith("model_") }?.forEach { it.delete() }
+                pickedMembers.clear()
+                refreshLabel()
             }
             .setNegativeButton("إلغاء", null)
             .show()
     }
 
-    // ---------- نماذج من ملفات ----------
+    // ---------- تنزيل نموذج مجاني ----------
+
+    private fun downloadDialog() {
+        if (downloading) { setStatus("يوجد تنزيل جارٍ، انتظر حتى ينتهي"); return }
+        val items = CATALOG.map {
+            it.title + if (File(modelsDir(), it.file).exists()) "  ✓ منزّل" else ""
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("اختر نموذجاً للتنزيل")
+            .setItems(items) { _, which ->
+                val item = CATALOG[which]
+                if (File(modelsDir(), item.file).exists()) {
+                    setStatus("هذا النموذج منزّل بالفعل")
+                } else {
+                    startDownload(item)
+                }
+            }
+            .show()
+    }
+
+    private fun startDownload(item: CatalogItem) {
+        downloading = true
+        Thread {
+            val dir = modelsDir()
+            val target = File(dir, item.file)
+            val part = File(dir, item.file + ".part")
+            try {
+                val conn = URL(item.url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 30000
+                conn.readTimeout = 60000
+                conn.setRequestProperty("User-Agent", "AICouncil/1.0")
+                val code = conn.responseCode
+                if (code == 401 || code == 403) {
+                    throw IllegalStateException(
+                        "الموقع رفض التنزيل (رمز $code). قد يتطلب النموذج تسجيل دخول أو موافقة على الترخيص."
+                    )
+                }
+                if (code !in 200..299) throw IllegalStateException("فشل التنزيل، رمز $code")
+                val total = conn.contentLengthLong
+                var done = 0L
+                var last = 0L
+                conn.inputStream.use { input ->
+                    part.outputStream().use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            val now = System.currentTimeMillis()
+                            if (now - last > 700) {
+                                last = now
+                                val mb = done / 1048576
+                                val totalText = if (total > 0) " من ${total / 1048576}" else ""
+                                setStatus("جارٍ تنزيل ${item.shortName}: $mb$totalText ميغابايت (أبقِ التطبيق مفتوحاً)")
+                            }
+                        }
+                    }
+                }
+                if (total > 0 && done < total) throw IllegalStateException("انقطع التنزيل قبل أن يكتمل")
+                if (!part.renameTo(target)) throw IllegalStateException("تعذر حفظ الملف")
+                setStatus("✅ تم تنزيل ${item.shortName}")
+            } catch (e: Throwable) {
+                part.delete()
+                setStatus("⚠️ ${e.message ?: e.toString()}")
+            } finally {
+                downloading = false
+                refreshLabel()
+            }
+        }.start()
+    }
+
+    // ---------- نموذج من ملف ----------
 
     private fun pickModels() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -258,16 +247,16 @@ class MainActivity : Activity() {
         if (requestCode == REQ_PICK && resultCode == RESULT_OK && data != null) {
             val clip = data.clipData
             if (clip != null) {
-                for (i in 0 until clip.itemCount) addLocal(clip.getItemAt(i).uri)
+                for (i in 0 until clip.itemCount) addPicked(clip.getItemAt(i).uri)
             } else {
-                data.data?.let { addLocal(it) }
+                data.data?.let { addPicked(it) }
             }
             refreshLabel()
         }
     }
 
-    private fun addLocal(uri: Uri) {
-        localMembers.add(Member(displayName(uri), "local", uri))
+    private fun addPicked(uri: Uri) {
+        pickedMembers.add(Member(displayName(uri), null, uri))
     }
 
     private fun displayName(uri: Uri): String {
@@ -281,14 +270,15 @@ class MainActivity : Activity() {
     // ---------- النقاش ----------
 
     private fun startCouncil() {
-        if (running) return
         val problem = problemInput.text.toString().trim()
-        val members = cloudMembers + localMembers
-        if (problem.isEmpty()) { statusView.text = "اكتب المشكلة أولاً"; return }
-        if (members.isEmpty()) { statusView.text = "أضف نموذجاً واحداً على الأقل"; return }
+        val members = allMembers()
+        if (downloading) { setStatus("انتظر حتى ينتهي التنزيل"); return }
+        if (problem.isEmpty()) { setStatus("اكتب المشكلة أولاً"); return }
+        if (members.isEmpty()) { setStatus("نزّل نموذجاً واحداً على الأقل"); return }
 
         running = true
-        startButton.isEnabled = false
+        stopRequested = false
+        startButton.text = "إيقاف"
         chat.removeAllViews()
         addBubble("المشكلة", problem)
         Thread { runCouncil(problem, members) }.start()
@@ -296,20 +286,21 @@ class MainActivity : Activity() {
 
     private fun runCouncil(problem: String, members: List<Member>) {
         try {
-            val transcript = mutableListOf("المشكلة: $problem")
+            val transcript = mutableListOf("المشكلة: " + problem.take(600))
+            val limit = if (members.size == 1) 1 else MAX_TURNS
             var turn = 0
             var agreed = false
 
-            outer@ while (turn < MAX_TURNS) {
+            outer@ while (turn < limit) {
                 for (m in members) {
-                    if (turn >= MAX_TURNS) break@outer
-                    setStatus("يكتب ${m.name}...")
+                    if (turn >= limit || stopRequested) break@outer
+                    setStatus("يكتب ${m.name}... (قد يستغرق دقيقة)")
                     val reply = try {
                         ask(m, transcript)
                     } catch (e: Throwable) {
-                        "[تعذر الرد: ${e.message}]"
+                        "[تعذر الرد: ${e.message ?: e.toString()}]"
                     }
-                    transcript.add("[${m.name}]: $reply")
+                    transcript.add("[${m.name}]: " + reply.take(REPLY_CHARS))
                     turn++
                     showBubble(m.name, reply)
                     if (reply.contains(DONE_MARK)) {
@@ -318,157 +309,40 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            setStatus(if (agreed) "✅ توصل الفريق إلى اتفاق" else "⏹ انتهى الحد الأقصى للجولات")
+            setStatus(
+                when {
+                    stopRequested -> "⏹ تم الإيقاف"
+                    agreed -> "✅ توصل الفريق إلى اتفاق"
+                    else -> "⏹ انتهى النقاش"
+                }
+            )
         } catch (e: Throwable) {
             showBubble("خطأ", e.message ?: e.toString())
         } finally {
             running = false
-            runOnUiThread { startButton.isEnabled = true }
+            runOnUiThread { startButton.text = "ابدأ النقاش" }
         }
+    }
+
+    // يبقي المشكلة وآخر الردود فقط، لأن ذاكرة النموذج الصغير محدودة
+    private fun trimHistory(t: List<String>): String {
+        val head = t.first()
+        var used = head.length
+        val keep = ArrayDeque<String>()
+        for (i in t.indices.reversed()) {
+            if (i == 0) break
+            if (used + t[i].length > HISTORY_CHARS) break
+            keep.addFirst(t[i])
+            used += t[i].length
+        }
+        return (listOf(head) + keep).joinToString("\n\n")
     }
 
     private fun ask(m: Member, transcript: List<String>): String {
-        val history = transcript.joinToString("\n\n") + "\n\nالآن دورك (${m.name}). ما ردك؟"
-        return when (m.provider) {
-            "claude" -> askClaude(m, history)
-            "openai" -> askOpenAI(m, history)
-            "gemini" -> askGemini(m, history)
-            else -> askLocal(copyToCache(m.uri!!), SYSTEM + "\n\n" + history)
-        }
+        val path = m.path ?: copyToCache(m.uri!!)
+        val prompt = SYSTEM + "\n\n" + trimHistory(transcript) + "\n\nالآن دورك (${m.name}). ما ردك؟"
+        return askLocal(path, prompt)
     }
-
-    // ---------- الاتصال بالنماذج السحابية ----------
-
-    private fun http(method: String, url: String, headers: Map<String, String>, body: JSONObject?): JSONObject {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = method
-            conn.connectTimeout = 30000
-            conn.readTimeout = 180000
-            for ((k, v) in headers) conn.setRequestProperty(k, v)
-            if (body != null) {
-                conn.doOutput = true
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            if (code !in 200..299) throw IllegalStateException("رمز $code: " + text.take(300))
-            return JSONObject(text)
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    private fun askClaude(m: Member, history: String): String {
-        val body = JSONObject()
-            .put("model", m.model)
-            .put("max_tokens", 1024)
-            .put("system", SYSTEM)
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", history)))
-        val r = http(
-            "POST", "https://api.anthropic.com/v1/messages",
-            mapOf("x-api-key" to m.apiKey, "anthropic-version" to "2023-06-01"), body
-        )
-        val content = r.getJSONArray("content")
-        val sb = StringBuilder()
-        for (i in 0 until content.length()) {
-            val c = content.getJSONObject(i)
-            if (c.optString("type") == "text") sb.append(c.getString("text"))
-        }
-        return sb.toString().trim().ifEmpty { "[رد فارغ]" }
-    }
-
-    private fun askOpenAI(m: Member, history: String): String {
-        val body = JSONObject()
-            .put("model", m.model)
-            .put("instructions", SYSTEM)
-            .put("input", history)
-        val r = http(
-            "POST", "https://api.openai.com/v1/responses",
-            mapOf("Authorization" to "Bearer ${m.apiKey}"), body
-        )
-        val out = r.getJSONArray("output")
-        val sb = StringBuilder()
-        for (i in 0 until out.length()) {
-            val item = out.getJSONObject(i)
-            if (item.optString("type") == "message") {
-                val content = item.getJSONArray("content")
-                for (j in 0 until content.length()) {
-                    val c = content.getJSONObject(j)
-                    if (c.optString("type") == "output_text") sb.append(c.getString("text"))
-                }
-            }
-        }
-        return sb.toString().trim().ifEmpty { "[رد فارغ]" }
-    }
-
-    private fun askGemini(m: Member, history: String): String {
-        val body = JSONObject()
-            .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))))
-            .put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put("role", "user")
-                        .put("parts", JSONArray().put(JSONObject().put("text", history)))
-                )
-            )
-        val r = http(
-            "POST", "https://generativelanguage.googleapis.com/v1beta/models/${m.model}:generateContent",
-            mapOf("x-goog-api-key" to m.apiKey), body
-        )
-        val parts = r.getJSONArray("candidates").getJSONObject(0)
-            .getJSONObject("content").getJSONArray("parts")
-        val sb = StringBuilder()
-        for (i in 0 until parts.length()) sb.append(parts.getJSONObject(i).optString("text"))
-        return sb.toString().trim().ifEmpty { "[رد فارغ]" }
-    }
-
-    private fun idsOf(arr: JSONArray, field: String): List<String> =
-        (0 until arr.length()).map { arr.getJSONObject(it).getString(field) }
-
-    // يجلب قائمة النماذج المتاحة لهذا المفتاح من الشركة نفسها
-    private fun fetchModels(provider: String, key: String): List<String> {
-        val list: List<String> = when (provider) {
-            "claude" -> {
-                val r = http(
-                    "GET", "https://api.anthropic.com/v1/models?limit=100",
-                    mapOf("x-api-key" to key, "anthropic-version" to "2023-06-01"), null
-                )
-                idsOf(r.getJSONArray("data"), "id")
-            }
-            "openai" -> {
-                val r = http("GET", "https://api.openai.com/v1/models", mapOf("Authorization" to "Bearer $key"), null)
-                val all = idsOf(r.getJSONArray("data"), "id")
-                val chat = all.filter { it.startsWith("gpt") || it.startsWith("o") }
-                if (chat.isEmpty()) all else chat
-            }
-            else -> {
-                val r = http(
-                    "GET", "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
-                    mapOf("x-goog-api-key" to key), null
-                )
-                val arr = r.getJSONArray("models")
-                val out = mutableListOf<String>()
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val methods = o.optJSONArray("supportedGenerationMethods")
-                    var ok = false
-                    if (methods != null) {
-                        for (j in 0 until methods.length()) {
-                            if (methods.getString(j) == "generateContent") ok = true
-                        }
-                    }
-                    if (ok) out.add(o.getString("name").removePrefix("models/"))
-                }
-                out
-            }
-        }
-        return list.sorted()
-    }
-
-    // ---------- النماذج المحلية ----------
 
     // ينسخ الملف إلى مساحة التطبيق لأن MediaPipe يحتاج مساراً حقيقياً
     private fun copyToCache(uri: Uri): String {
@@ -485,11 +359,11 @@ class MainActivity : Activity() {
     private fun askLocal(modelPath: String, prompt: String): String {
         val options = LlmInference.LlmInferenceOptions.builder()
             .setModelPath(modelPath)
-            .setMaxTokens(1024)
+            .setMaxTokens(1280)
             .build()
         val llm = LlmInference.createFromOptions(this, options)
         return try {
-            llm.generateResponse(prompt).trim()
+            llm.generateResponse(prompt).trim().ifEmpty { "[رد فارغ]" }
         } finally {
             llm.close()
         }
