@@ -390,19 +390,37 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "text/plain; charset=utf-8", "غير موجود".encode("utf-8"))
 
 
+def lan_ip():
+    """عنوان الجهاز على الشبكة المحلية (مثل 192.168.1.20)."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 def main():
+    import sys
+    lan = "--lan" in sys.argv
+
     try:
         count = len(list_models())
         print(f"✅ تم الاتصال بـ Ollama ({count} نموذج مثبت).")
     except Exception:
         print("⚠️ تعذر الاتصال بـ Ollama. تأكد أنه يعمل ثم أعد تحميل الصفحة.")
 
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    host = "0.0.0.0" if lan else "127.0.0.1"
+    server = ThreadingHTTPServer((host, PORT), Handler)
     url = f"http://127.0.0.1:{PORT}"
     print(f"مجلس النماذج يعمل على: {url}")
+    if lan:
+        print(f"من الهاتف على نفس الواي فاي افتح: http://{lan_ip()}:{PORT}")
+        print("تنبيه: كل من على نفس الشبكة يستطيع فتح التطبيق، فاستخدم --lan في شبكتك الخاصة فقط.")
     print("اضغط Ctrl+C للإيقاف.")
 
-    if os.environ.get("NO_BROWSER") != "1":
+    if not lan and os.environ.get("NO_BROWSER") != "1":
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     try:
