@@ -1,0 +1,27 @@
+name: Build AI Council app
+
+on:
+  push:
+    branches: [add-ai-council]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build single-file app
+        run: |
+          pip install pyinstaller
+          pyinstaller --onefile --name AICouncil ai-council/ai_council_app.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AICouncil-${{ matrix.os }}
+          path: dist/*

@@ -86,110 +86,220 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>مجلس النماذج</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, "Segoe UI", Tahoma, sans-serif; margin: 0; background: #f5f5f7; color: #1d1d1f; }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 60px; }
-  h1 { font-size: 22px; margin: 0 0 16px; }
-  .card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: 16px; }
-  .models { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-  .models label { display: flex; align-items: center; gap: 6px; background: #f0f0f3; padding: 6px 10px; border-radius: 8px; font-size: 14px; direction: ltr; }
-  textarea { width: 100%; min-height: 90px; box-sizing: border-box; border: 1px solid #d2d2d7; border-radius: 10px; padding: 10px; font: inherit; font-size: 15px; resize: vertical; }
-  button { background: #0071e3; color: #fff; border: 0; border-radius: 10px; padding: 10px 22px; font-size: 15px; cursor: pointer; margin-top: 10px; }
-  button:disabled { background: #8e8e93; cursor: default; }
-  .status { font-size: 13px; color: #6e6e73; margin-top: 8px; min-height: 18px; }
-  .msg { border-radius: 12px; padding: 12px 14px; margin: 10px 0; white-space: pre-wrap; line-height: 1.7; font-size: 15px; background: #f0f0f3; }
-  .msg .who { font-weight: 600; font-size: 13px; color: #0071e3; margin-bottom: 4px; direction: ltr; text-align: right; }
-  .msg.final { background: #e8f5e9; }
-  .msg.error { background: #fdecea; }
-  .hidden { display: none; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1c1c1e; color: #f5f5f7; }
-    .card { background: #2c2c2e; }
-    .models label { background: #3a3a3c; }
-    textarea { background: #1c1c1e; color: #f5f5f7; border-color: #48484a; }
-    .msg { background: #3a3a3c; }
-    .msg.final { background: #1e3a24; }
-    .msg.error { background: #4a2020; }
+  :root {
+    --bg: #0b0d12;
+    --panel: rgba(255,255,255,.04);
+    --line: rgba(255,255,255,.09);
+    --text: #e9ecf3;
+    --muted: #8a93a6;
+    --accent: #7c9cff;
+    --accent2: #b28cff;
+    --ok: #4ade80;
+    --bad: #f87171;
   }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: var(--text);
+    font-family: "Segoe UI", Tahoma, system-ui, sans-serif;
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(124,156,255,.18), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(178,140,255,.14), transparent 60%),
+      var(--bg);
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 36px 18px 80px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 8px 30px rgba(124,156,255,.35); font-size: 22px;
+  }
+  h1 { font-size: 24px; margin: 0; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 3px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 18px; backdrop-filter: blur(10px); margin-bottom: 16px;
+  }
+  .label { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .models { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: rgba(255,255,255,.03); font-size: 14px; direction: ltr; transition: .2s;
+  }
+  .chip input { display: none; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: .2s; }
+  .chip.on { border-color: rgba(124,156,255,.6); background: rgba(124,156,255,.12); }
+  .chip.on .dot { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  textarea {
+    width: 100%; min-height: 96px; resize: vertical; border-radius: 14px; padding: 14px;
+    background: rgba(0,0,0,.25); color: var(--text); border: 1px solid var(--line);
+    font: inherit; font-size: 15px; line-height: 1.7; outline: none; transition: .2s;
+  }
+  textarea:focus { border-color: rgba(124,156,255,.6); box-shadow: 0 0 0 4px rgba(124,156,255,.12); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  button#go {
+    border: 0; cursor: pointer; color: #fff; font: inherit; font-size: 15px; font-weight: 600;
+    padding: 12px 26px; border-radius: 14px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 8px 24px rgba(124,156,255,.3); transition: transform .15s, opacity .2s;
+  }
+  button#go:hover { transform: translateY(-1px); }
+  button#go:disabled { opacity: .5; cursor: default; transform: none; }
+  .status { font-size: 14px; color: var(--muted); }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--bad); }
+  #log { display: flex; flex-direction: column; gap: 12px; }
+  .bubble {
+    display: flex; gap: 12px; align-items: flex-start; animation: rise .35s ease both;
+  }
+  .avatar {
+    flex: 0 0 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+    font-weight: 700; font-size: 14px; color: #fff; direction: ltr;
+  }
+  .card {
+    flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 14px 16px; line-height: 1.8; font-size: 15px; white-space: pre-wrap; min-width: 0;
+  }
+  .card .who { font-size: 12px; color: var(--muted); margin-bottom: 6px; direction: ltr; text-align: right; }
+  .bubble.user .card { background: rgba(124,156,255,.1); border-color: rgba(124,156,255,.25); }
+  .bubble.err .card { background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.3); }
+  .bubble.final .card { background: rgba(74,222,128,.08); border-color: rgba(74,222,128,.3); }
+  .typing { display: inline-flex; gap: 5px; padding: 6px 2px; }
+  .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; }
+  .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%,80%,100% { opacity: .2; } 40% { opacity: 1; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .empty { color: var(--muted); font-size: 14px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>مجلس النماذج</h1>
-  <div class="card">
-    <div id="models" class="models">جارٍ تحميل النماذج...</div>
+  <header>
+    <div class="logo">✦</div>
+    <div>
+      <h1>مجلس النماذج</h1>
+      <div class="sub">نماذج الذكاء الاصطناعي على جهازك، تتناقش معاً حتى تتفق على الحل</div>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="label">النماذج المتاحة على جهازك</div>
+    <div id="models" class="models"><span class="empty">جارٍ التحميل...</span></div>
   </div>
-  <div class="card">
+
+  <div class="panel">
     <textarea id="problem" placeholder="اكتب المشكلة التي تريد من النماذج حلها..."></textarea>
-    <button id="go">ابدأ النقاش</button>
-    <div id="status" class="status"></div>
+    <div class="row">
+      <div id="status" class="status"></div>
+      <button id="go">ابدأ النقاش</button>
+    </div>
   </div>
+
   <div id="log"></div>
 </div>
+
 <script>
 const $ = (id) => document.getElementById(id);
+const COLORS = ["#7c9cff", "#b28cff", "#4ade80", "#fbbf24", "#f472b6", "#38bdf8", "#fb923c"];
+const colorFor = (name) => {
+  let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+};
+const initials = (name) => name.split(":")[0].slice(0, 2).toUpperCase();
 
 async function loadModels() {
+  const box = $("models");
   try {
     const r = await fetch("/api/models");
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "خطأ");
-    const box = $("models");
     box.textContent = "";
     if (!data.models.length) {
-      box.textContent = "لا توجد نماذج مثبتة. حمّل نموذجاً بأمر: ollama pull llama3.2";
+      box.innerHTML = '<span class="empty">لا توجد نماذج مثبتة. حمّل نموذجاً بأمر: ollama pull llama3.2</span>';
       return;
     }
     for (const m of data.models) {
       const label = document.createElement("label");
+      label.className = "chip on";
       const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = m;
-      cb.checked = true;
-      label.append(cb, document.createTextNode(m));
+      cb.type = "checkbox"; cb.value = m; cb.checked = true;
+      cb.addEventListener("change", () => label.classList.toggle("on", cb.checked));
+      const dot = document.createElement("span"); dot.className = "dot";
+      label.append(cb, dot, document.createTextNode(m));
       box.append(label);
     }
   } catch (e) {
-    $("models").textContent = "تعذر الاتصال بـ Ollama. تأكد أنه يعمل. (" + e.message + ")";
+    box.innerHTML = '<span class="empty">تعذر الاتصال بـ Ollama. تأكد أنه يعمل ثم حدّث الصفحة.</span>';
   }
 }
 
-function addMessage(cls, who, text) {
-  const div = document.createElement("div");
-  div.className = "msg " + cls;
-  if (who) {
-    const w = document.createElement("div");
-    w.className = "who";
-    w.textContent = who;
-    div.append(w);
+function addBubble(kind, name, text) {
+  const wrap = document.createElement("div");
+  wrap.className = "bubble " + kind;
+  const av = document.createElement("div");
+  av.className = "avatar";
+  if (kind === "user") { av.textContent = "أنت"; av.style.background = "#4b5563"; }
+  else if (kind === "err") { av.textContent = "!"; av.style.background = "#dc2626"; }
+  else if (kind === "final") { av.textContent = "✓"; av.style.background = "#16a34a"; }
+  else { av.textContent = initials(name); av.style.background = colorFor(name); }
+  const card = document.createElement("div");
+  card.className = "card";
+  if (name && kind !== "user") {
+    const w = document.createElement("div"); w.className = "who"; w.textContent = name;
+    card.append(w);
   }
-  div.append(document.createTextNode(text));
-  $("log").append(div);
-  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  card.append(document.createTextNode(text));
+  wrap.append(av, card);
+  $("log").append(wrap);
+  wrap.scrollIntoView({ behavior: "smooth", block: "end" });
+  return wrap;
 }
+
+let typingEl = null;
+function setTyping(name) {
+  if (typingEl) typingEl.remove();
+  typingEl = addBubble("", name, "");
+  const card = typingEl.querySelector(".card");
+  card.textContent = "";
+  const w = document.createElement("div"); w.className = "who"; w.textContent = name;
+  const dots = document.createElement("div"); dots.className = "typing";
+  dots.innerHTML = "<i></i><i></i><i></i>";
+  card.append(w, dots);
+}
+function clearTyping() { if (typingEl) { typingEl.remove(); typingEl = null; } }
 
 function handleEvent(ev) {
   if (ev.type === "thinking") {
-    $("status").textContent = "⏳ " + ev.model + " يكتب...";
+    setTyping(ev.model);
+    $("status").textContent = "يكتب " + ev.model + "...";
+    $("status").className = "status";
   } else if (ev.type === "reply") {
-    addMessage("", ev.model, ev.text);
+    clearTyping();
+    addBubble("", ev.model, ev.text);
   } else if (ev.type === "done") {
-    $("status").textContent = ev.reason === "agreed" ? "✅ توصل الفريق إلى اتفاق." : "⏹ انتهى الحد الأقصى للجولات.";
+    clearTyping();
+    const ok = ev.reason === "agreed";
+    $("status").textContent = ok ? "✅ توصل الفريق إلى اتفاق" : "⏹ انتهى الحد الأقصى للجولات";
+    $("status").className = "status " + (ok ? "ok" : "");
+    if (ok) addBubble("final", "الاتفاق", "تم الوصول إلى حل متفق عليه. راجع الردود أعلاه.");
   } else if (ev.type === "error") {
-    addMessage("error", "خطأ", ev.text);
+    clearTyping();
+    addBubble("err", "خطأ", ev.text);
   }
 }
 
 $("go").addEventListener("click", async () => {
   const problem = $("problem").value.trim();
   const models = [...document.querySelectorAll("#models input:checked")].map((c) => c.value);
-  if (!problem) { $("status").textContent = "اكتب المشكلة أولاً."; return; }
-  if (!models.length) { $("status").textContent = "اختر نموذجاً واحداً على الأقل."; return; }
+  if (!problem) { $("status").textContent = "اكتب المشكلة أولاً"; $("status").className = "status bad"; return; }
+  if (!models.length) { $("status").textContent = "اختر نموذجاً واحداً على الأقل"; $("status").className = "status bad"; return; }
 
   $("log").textContent = "";
-  addMessage("final", "المشكلة", problem);
+  addBubble("user", "", problem);
   $("go").disabled = true;
   $("status").textContent = "بدأ النقاش...";
+  $("status").className = "status";
 
   try {
     const url = "/api/run?problem=" + encodeURIComponent(problem) + "&models=" + encodeURIComponent(models.join(","));
@@ -202,14 +312,15 @@ $("go").addEventListener("click", async () => {
       if (done) break;
       buf += dec.decode(value, { stream: true });
       let i;
-      while ((i = buf.indexOf("\\n\\n")) >= 0) {
+      while ((i = buf.indexOf("\n\n")) >= 0) {
         const chunk = buf.slice(0, i);
         buf = buf.slice(i + 2);
         if (chunk.startsWith("data: ")) handleEvent(JSON.parse(chunk.slice(6)));
       }
     }
   } catch (e) {
-    addMessage("error", "خطأ", e.message);
+    clearTyping();
+    addBubble("err", "خطأ", e.message);
   } finally {
     $("go").disabled = false;
   }

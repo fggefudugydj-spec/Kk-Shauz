@@ -7,7 +7,12 @@
 - Ollama يعمل على جهازك: https://ollama.com
 - نموذج واحد على الأقل، مثل: `ollama pull llama3.2`
 
-## التشغيل
+## تحميل التطبيق كملف جاهز (بدون Python)
+1. افتح تبويب **Actions** في المستودع واختر آخر تشغيل ناجح لـ "Build AI Council app".
+2. نزّل الملف المناسب لنظامك من قسم **Artifacts**: `AICouncil-windows-latest` أو `AICouncil-macos-latest` أو `AICouncil-ubuntu-latest`.
+3. فكّ الضغط وشغّل الملف `AICouncil`. يفتح المتصفح تلقائياً.
+
+## التشغيل من الكود
 ```bash
 python ai_council_app.py
 ```
