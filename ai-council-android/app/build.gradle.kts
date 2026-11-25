@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.aicouncil"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.aicouncil"
@@ -21,9 +21,12 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
 }
 
 dependencies {
     implementation("com.google.mediapipe:tasks-genai:0.10.22")
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 }

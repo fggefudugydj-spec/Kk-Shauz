@@ -14,6 +14,10 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mlkit.genai.prompt.DownloadStatus
+import com.google.mlkit.genai.prompt.FeatureStatus
+import com.google.mlkit.genai.prompt.Generation
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -30,6 +34,9 @@ class MainActivity : Activity() {
         const val REPLY_CHARS = 600
         const val DONE_MARK = "[تم الحل]"
         const val REQ_PICK = 1
+        const val NANO_PATH = "gemini-nano"
+        const val NANO_UNKNOWN = -99
+        const val NANO_ERROR = -98
         const val SYSTEM =
             "أنت عضو في فريق نماذج ذكاء اصطناعي يحل مشكلة معاً. " +
             "اقرأ النقاش، وأضف ما يفيد: تصحيحاً أو اقتراحاً أو تأييداً مع سبب. " +
@@ -62,6 +69,8 @@ class MainActivity : Activity() {
     @Volatile private var running = false
     @Volatile private var stopRequested = false
     @Volatile private var downloading = false
+    @Volatile private var nanoStatus = NANO_UNKNOWN
+    private val nano by lazy { Generation.getClient() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,10 +85,14 @@ class MainActivity : Activity() {
             setTypeface(null, Typeface.BOLD)
         }
         val subtitle = TextView(this).apply {
-            text = "نماذج تعمل على هاتفك فقط، بدون إنترنت ولا مفاتيح (التنزيل يحتاج إنترنت لمرة واحدة)"
+            text = "نماذج تعمل على هاتفك فقط، بدون مفاتيح. التنزيل يحتاج إنترنت لمرة واحدة."
             textSize = 13f
         }
         modelsLabel = TextView(this)
+        val nanoButton = Button(this).apply {
+            text = "Gemini Nano (مدمج في الهاتف)"
+            setOnClickListener { nanoAction() }
+        }
         val downloadButton = Button(this).apply {
             text = "تنزيل نموذج مجاني"
             setOnClickListener { downloadDialog() }
@@ -114,6 +127,7 @@ class MainActivity : Activity() {
         root.addView(title)
         root.addView(subtitle)
         root.addView(modelsLabel)
+        root.addView(nanoButton)
         root.addView(downloadButton)
         root.addView(pickButton)
         root.addView(clearButton)
@@ -123,6 +137,7 @@ class MainActivity : Activity() {
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
         refreshLabel()
+        checkNano()
     }
 
     // ---------- الأعضاء ----------
@@ -133,15 +148,27 @@ class MainActivity : Activity() {
         CATALOG.filter { File(modelsDir(), it.file).exists() }
             .map { Member(it.shortName, File(modelsDir(), it.file).absolutePath) }
 
-    private fun allMembers(): List<Member> = downloadedMembers() + pickedMembers
+    private fun allMembers(): List<Member> {
+        val nanoList = if (nanoStatus == FeatureStatus.AVAILABLE) listOf(Member("Gemini Nano", NANO_PATH)) else emptyList()
+        return nanoList + downloadedMembers() + pickedMembers
+    }
 
     private fun refreshLabel() = runOnUiThread {
         val all = allMembers()
-        modelsLabel.text = if (all.isEmpty()) {
+        val nanoLine = when (nanoStatus) {
+            FeatureStatus.AVAILABLE -> "Gemini Nano: جاهز ✓"
+            FeatureStatus.DOWNLOADABLE -> "Gemini Nano: مدعوم، اضغط الزر لتنزيله"
+            FeatureStatus.DOWNLOADING -> "Gemini Nano: قيد التنزيل"
+            FeatureStatus.UNAVAILABLE -> "Gemini Nano: غير مدعوم في هذا الهاتف"
+            NANO_UNKNOWN -> "Gemini Nano: جارٍ الفحص..."
+            else -> "Gemini Nano: تعذر الفحص"
+        }
+        val members = if (all.isEmpty()) {
             "لا توجد نماذج بعد. اضغط تنزيل نموذج مجاني."
         } else {
             "الأعضاء: " + all.joinToString("، ") { it.name }
         }
+        modelsLabel.text = nanoLine + "\n" + members
     }
 
     private fun confirmClear() {
@@ -156,6 +183,60 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("إلغاء", null)
             .show()
+    }
+
+    // ---------- Gemini Nano (مدمج في بعض الهواتف) ----------
+
+    private fun checkNano() {
+        Thread {
+            try {
+                nanoStatus = runBlocking { nano.checkStatus() }
+            } catch (e: Throwable) {
+                nanoStatus = NANO_ERROR
+            }
+            refreshLabel()
+        }.start()
+    }
+
+    private fun nanoAction() {
+        when (nanoStatus) {
+            FeatureStatus.AVAILABLE -> setStatus("Gemini Nano جاهز، وسيشارك في النقاش تلقائياً")
+            FeatureStatus.UNAVAILABLE -> setStatus("هاتفك لا يدعم Gemini Nano. استخدم النماذج المنزّلة بدلاً منه.")
+            FeatureStatus.DOWNLOADABLE -> downloadNano()
+            FeatureStatus.DOWNLOADING -> setStatus("Gemini Nano قيد التنزيل من نظام الهاتف، انتظر قليلاً")
+            else -> { setStatus("جارٍ إعادة الفحص..."); checkNano() }
+        }
+    }
+
+    private fun downloadNano() {
+        if (downloading) { setStatus("يوجد تنزيل جارٍ، انتظر حتى ينتهي"); return }
+        downloading = true
+        Thread {
+            try {
+                runBlocking {
+                    nano.download().collect { st ->
+                        when (st) {
+                            is DownloadStatus.DownloadProgress ->
+                                setStatus("تنزيل Gemini Nano: ${st.totalBytesDownloaded / 1048576} ميغابايت")
+                            is DownloadStatus.DownloadFailed ->
+                                throw IllegalStateException("فشل تنزيل Gemini Nano")
+                            else -> {}
+                        }
+                    }
+                }
+                setStatus("✅ تم تجهيز Gemini Nano")
+            } catch (e: Throwable) {
+                setStatus("⚠️ ${e.message ?: e.toString()}")
+            } finally {
+                downloading = false
+                checkNano()
+            }
+        }.start()
+    }
+
+    private fun askNano(prompt: String): String {
+        val text = runBlocking { nano.generateContent(prompt).candidates[0].text }
+        return text.trim().ifEmpty { "[رد فارغ]" }
     }
 
     // ---------- تنزيل نموذج مجاني ----------
@@ -339,8 +420,9 @@ class MainActivity : Activity() {
     }
 
     private fun ask(m: Member, transcript: List<String>): String {
-        val path = m.path ?: copyToCache(m.uri!!)
         val prompt = SYSTEM + "\n\n" + trimHistory(transcript) + "\n\nالآن دورك (${m.name}). ما ردك؟"
+        if (m.path == NANO_PATH) return askNano(prompt)
+        val path = m.path ?: copyToCache(m.uri!!)
         return askLocal(path, prompt)
     }
 
